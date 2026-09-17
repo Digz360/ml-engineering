@@ -20,3 +20,5 @@ src/data/llm/*.pt
 # Model checkpoints
 *.pt
 *.pth
+
+*.jpg
