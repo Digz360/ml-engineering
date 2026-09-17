@@ -1,1 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
 .venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# ML data / checkpoints
+src/data/llm/*.txt
+src/data/llm/*.pt
+
+# Hugging Face / caches
+.cache/
+
+# Model checkpoints
+*.pt
+*.pth
