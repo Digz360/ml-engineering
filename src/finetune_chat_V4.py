@@ -3,18 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tokenizers import Tokenizer
 from model import MiniGPT
+import json
 
 
 ## CONFIGURAÇÃO DO MODELO ##
 
 batch_size = 4
-block_size = 256
-
-n_embd = 256
-num_heads = 8
-num_layers = 8
-dropout = 0.1
-
+BASE_CHECKPOINT = "/workspace/llm/minigpt_large_best.pt"
+TRAIN_FILE = "/workspace/llm/chat_large_train.jsonl"
+VAL_FILE = "/workspace/llm/chat_large_val.jsonl"
 
 ## GPU ##
 
@@ -28,17 +25,25 @@ print(f"Device: {device}")
 ## CARREGAR MODELO ##
 
 checkpoint = torch.load(
-    "src/data/llm/minigpt_v4_base.pt",
-    map_location=device
+    BASE_CHECKPOINT,
+    map_location=device,
+    weights_only=False
 )
 
+vocab_size = checkpoint["vocab_size"]
+n_embd = checkpoint["n_embd"]
+num_heads = checkpoint["num_heads"]
+num_layers = checkpoint["num_layers"]
+block_size = checkpoint["block_size"]
+dropout = checkpoint["dropout"]
+
 model = MiniGPT(
-    vocab_size=checkpoint["vocab_size"],
-    n_embd=checkpoint["n_embd"],
-    num_heads=checkpoint["num_heads"],
-    block_size=checkpoint["block_size"],
-    num_layers=checkpoint["num_layers"],
-    dropout=checkpoint["dropout"]
+    vocab_size=vocab_size,
+    n_embd=n_embd,
+    num_heads=num_heads,
+    block_size=block_size,
+    num_layers=num_layers,
+    dropout=dropout
 ).to(device)
 
 model.load_state_dict(
@@ -46,7 +51,8 @@ model.load_state_dict(
 )
 
 print(
-    f"Base V4 carregado | "
+    f"Large Base carregado | "
+    f"step = {checkpoint['step']:,} | "
     f"val_loss = {checkpoint['val_loss']:.4f}"
 )
 
@@ -60,7 +66,7 @@ best_val_loss = float("inf")
 ## TOKENIZER ##
 
 tokenizer = Tokenizer.from_file(
-    "src/data/llm/tokenizer_v4.json"
+    "/workspace/llm/tokenizer_large.json"
 )
 
 vocab_size = tokenizer.get_vocab_size()
@@ -81,54 +87,104 @@ def decode(ids):
 
 ## DATASET CONVERSACIONAL ##
 
-with open(
-    "src/data/llm/chat_v3.txt",
-    "r",
-    encoding="utf-8"
-) as f:
-    chat_text = f.read()
+def load_conversations(path):
+    conversations = []
+
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+
+            record = json.loads(line)
+
+            conversations.append(
+                record["messages"]
+            )
+
+    return conversations
 
 
-conversations = [
-    conversation.strip()
-    for conversation in chat_text.split("\n\n")
-    if conversation.strip()
-]
+train_conversations = load_conversations(TRAIN_FILE)
+val_conversations = load_conversations(VAL_FILE)
+
+print(
+    f"Conversas carregadas | "
+    f"train = {len(train_conversations):,} | "
+    f"val = {len(val_conversations):,}"
+)
 
 
 ## CRIAR AS CONVERSAS ##
 
 
 def prepare_conversation(conversation):
-    user_part, assistant_part = conversation.split("Assistente:", 1)
+    all_ids = []
+    loss_mask = []
 
-    context_text = user_part + "Assistente:"
-    full_text = context_text + assistant_part
+    for message in conversation:
+        role = message["role"]
+        content = message["content"]
 
-    context_ids = encode(context_text)
-    full_ids = encode(full_text)
+        if role == "system":
+            text = f"Sistema: {content}\n"
+            supervise = False
 
-    loss_mask = (
-        [0] * len(context_ids)
-        + [1] * (len(full_ids) - len(context_ids))
+        elif role == "user":
+            text = f"Utilizador: {content}\n"
+            supervise = False
+
+        elif role == "assistant":
+            text = f"Assistente: {content}\n"
+            supervise = True
+
+        else:
+            continue
+
+        ids = encode(text)
+
+        all_ids.extend(ids)
+
+        loss_mask.extend(
+            [1 if supervise else 0] * len(ids)
+        )
+
+    # EOS termina a conversa
+    all_ids.append(eos_id)
+
+    # Queremos que o modelo aprenda a terminar
+    # depois da última resposta.
+    loss_mask.append(1)
+
+    x = torch.tensor(
+        all_ids[:-1],
+        dtype=torch.long
     )
 
-    x = torch.tensor(full_ids[:-1], dtype=torch.long)
-    y = torch.tensor(full_ids[1:], dtype=torch.long)
-    mask = torch.tensor(loss_mask[1:], dtype=torch.float32)
+    y = torch.tensor(
+        all_ids[1:],
+        dtype=torch.long
+    )
+
+    # A máscara corresponde ao token que estamos
+    # a tentar prever (y), daí o [1:].
+    mask = torch.tensor(
+        loss_mask[1:],
+        dtype=torch.float32
+    )
 
     return x, y, mask
 
-x, y, mask = prepare_conversation(conversations[0])
+x, y, mask = prepare_conversation(
+    train_conversations[0]
+)
 
+print("Shape:", x.shape)
+print("Tokens supervisionados:", int(mask.sum().item()))
+print("Tokens totais:", len(mask))
+print("Texto:")
+print(decode(x.tolist()))
 
-## SPLIT DA DATA ## 
-
-n = int(0.9 * len(conversations))
-
-train_conversations = conversations[:n]
-val_conversations = conversations[n:]
-
+raise SystemExit
 
 ## DEFINIR BATCHES, AQUI ESTAMOS A RETIRAR BATCHES AO ACASO PELO INPUT E A ENCHER COM 0 AQUELES QUE TÊM ##
 ## MENOS TOKENS, PARA ALÉM DISSO TAMOS TAMBÉM A DIZER QUE ESSES NÃO INTERESSAM PARA A LOSS ##
