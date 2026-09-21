@@ -74,12 +74,13 @@ for batch_size in batch_sizes:
         torch.cuda.reset_peak_memory_stats()
 
         # warm-up
-        logits = model(x)
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            logits = model(x)
 
-        loss = F.cross_entropy(
-            logits.view(-1, VOCAB_SIZE),
-            y.view(-1)
-        )
+            loss = F.cross_entropy(
+                logits.view(-1, VOCAB_SIZE),
+                y.view(-1)
+            )
 
         loss.backward()
         optimizer.step()
