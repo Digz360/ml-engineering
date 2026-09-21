@@ -159,7 +159,8 @@ print(
 
 checkpoint = torch.load(
     "src/data/llm/minigpt_v4_base.pt",
-    map_location=device
+    map_location=device,
+    weights_only=False
 )
 
 model.load_state_dict(
