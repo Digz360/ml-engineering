@@ -4,65 +4,52 @@ import torch.nn.functional as F
 
 ## ATTENTION ##
 
-class Head(nn.Module):
-    def __init__(self, n_embd, head_size, block_size, dropout):
-        super().__init__()
-
-        self.key = nn.Linear(n_embd, head_size, bias=False)
-        self.query = nn.Linear(n_embd, head_size, bias=False)
-        self.value = nn.Linear(n_embd, head_size, bias=False)
-
-        self.register_buffer(
-            "tril",
-            torch.tril(torch.ones(block_size, block_size))
-        )
-
-        self.head_size = head_size
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, x):
-        B, T, C = x.shape
-
-        k = self.key(x)
-        q = self.query(x)
-        v = self.value(x)
-
-        scores = q @ k.transpose(-2, -1)
-        scores = scores / (self.head_size ** 0.5)
-
-        scores = scores.masked_fill(
-            self.tril[:T, :T] == 0,
-            float("-inf")
-        )
-
-        weights = F.softmax(scores, dim=-1)
-        weights = self.dropout(weights)
-
-        out = weights @ v
-
-        return out
-
 class MultiHeadAttention(nn.Module):
     def __init__(self, n_embd, num_heads, block_size, dropout):
         super().__init__()
 
-        head_size = n_embd // num_heads
+        assert n_embd % num_heads == 0
 
-        self.heads = nn.ModuleList([
-            Head(n_embd, head_size, block_size, dropout)
-            for _ in range(num_heads)
-        ])
+        self.num_heads = num_heads
+        self.head_size = n_embd // num_heads
+        self.dropout = dropout
+
+        # Calculamos Q, K e V de todos os heads de uma vez
+        self.qkv = nn.Linear(
+            n_embd,
+            3 * n_embd,
+            bias=False
+        )
 
         self.proj = nn.Linear(n_embd, n_embd)
 
     def forward(self, x):
-        outputs = [head(x) for head in self.heads]
+        B, T, C = x.shape
 
-        out = torch.cat(outputs, dim=-1)
+        # [B, T, C] -> [B, T, 3C]
+        qkv = self.qkv(x)
 
-        out = self.proj(out)
+        # -> três tensores [B, T, C]
+        q, k, v = qkv.chunk(3, dim=-1)
 
-        return out
+        # [B,T,C] -> [B,T,H,D] -> [B,H,T,D]
+        q = q.view(B, T, self.num_heads, self.head_size).transpose(1, 2)
+        k = k.view(B, T, self.num_heads, self.head_size).transpose(1, 2)
+        v = v.view(B, T, self.num_heads, self.head_size).transpose(1, 2)
+
+        # Attention otimizada
+        out = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=True
+        )
+
+        # [B,H,T,D] -> [B,T,H,D] -> [B,T,C]
+        out = out.transpose(1, 2).contiguous().view(B, T, C)
+
+        return self.proj(out)
 
 class FeedForward(nn.Module):
     def __init__(self, n_embd, dropout):
