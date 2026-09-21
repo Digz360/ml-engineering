@@ -104,13 +104,17 @@ def valid_conversation(messages):
 def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    data_files = [
+    f"amalia_stf_pt_{i:04d}.parquet"
+    for i in range(67)
+]
+
     dataset = load_dataset(
         "inaciose/AMALIA-LLM-0626-SFT-Dataset-classlangcode",
-        data_files="amalia_stf_pt_0000.parquet",
+        data_files=data_files,
         split="train",
         streaming=True
     )
-
     seen = set()
 
     stats = Counter()
