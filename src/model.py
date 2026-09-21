@@ -121,7 +121,8 @@ class MiniGPT(nn.Module):
 
         self.ln_final = nn.LayerNorm(n_embd)
 
-        self.lm_head = nn.Linear(n_embd, vocab_size)
+        self.lm_head = nn.Linear(n_embd, vocab_size,  bias=False)
+        self.lm_head.weight = self.token_embedding.weight
 
     def forward(self, idx):
         B, T = idx.shape
