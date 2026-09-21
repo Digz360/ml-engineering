@@ -104,9 +104,9 @@ def valid_conversation(messages):
 def main():
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
     dataset = load_dataset(
         "inaciose/AMALIA-LLM-0626-SFT-Dataset-classlangcode",
+        data_files="amalia_stf_pt_0000.parquet",
         split="train",
         streaming=True
     )
