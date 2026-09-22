@@ -1,8 +1,7 @@
 import torch
 from tokenizers import Tokenizer
 
-from model import MiniGPT
-
+from src.minigpt.model import MiniGPT
 
 # ============================================================
 # CONFIG
