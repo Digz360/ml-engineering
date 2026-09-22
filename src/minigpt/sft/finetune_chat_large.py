@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from tokenizers import Tokenizer
-from model import MiniGPT
+from src.minigpt.model import MiniGPT
 import json
 
 
