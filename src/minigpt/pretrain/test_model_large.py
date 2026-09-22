@@ -47,14 +47,12 @@ print(f"Best val loss: {checkpoint.get('best_val_loss', 'N/A')}")
 # MODEL
 # ============================================================
 
-config = checkpoint.get("config", {})
-
-VOCAB_SIZE = config.get("vocab_size", 32_000)
-BLOCK_SIZE = config.get("block_size", 1024)
-N_EMBD = config.get("n_embd", 768)
-NUM_HEADS = config.get("num_heads", 12)
-NUM_LAYERS = config.get("num_layers", 12)
-DROPOUT = config.get("dropout", 0.1)
+VOCAB_SIZE = checkpoint["vocab_size"]
+BLOCK_SIZE = checkpoint["block_size"]
+N_EMBD = checkpoint["n_embd"]
+NUM_HEADS = checkpoint["num_heads"]
+NUM_LAYERS = checkpoint["num_layers"]
+DROPOUT = checkpoint["dropout"]
 
 model = MiniGPT(
     vocab_size=VOCAB_SIZE,
@@ -65,7 +63,7 @@ model = MiniGPT(
     dropout=DROPOUT,
 )
 
-model.load_state_dict(checkpoint["model"])
+model.load_state_dict(checkpoint["model_state_dict"])
 model.to(DEVICE)
 model.eval()
 
