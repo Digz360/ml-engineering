@@ -47,7 +47,7 @@ for source in sorted(samples_by_source):
         print(f"\n--- EXEMPLO {i} ---")
         print(f"score: {example.get('score')}")
 
-        conversation = example.get("conversation", [])
+        conversation = example.get("messages", [])
 
         for message in conversation:
             role = message.get("role", "?")
