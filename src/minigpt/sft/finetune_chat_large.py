@@ -1,19 +1,48 @@
+import json
+import random
+from pathlib import Path
+
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from tokenizers import Tokenizer
+
 from src.minigpt.model import MiniGPT
-import json
 
 
-## CONFIGURAÇÃO DO MODELO ##
+# ============================================================
+# CONFIG
+# ============================================================
 
-batch_size = 4
+BATCH_SIZE = 4
+LEARNING_RATE = 1e-4
+
+MAX_STEPS = 30_000
+EVAL_INTERVAL = 250
+EVAL_ITERS = 20
+LOG_INTERVAL = 25
+
+SEED = 42
+
 BASE_CHECKPOINT = "/workspace/llm/minigpt_large_best.pt"
-TRAIN_FILE = "/workspace/llm/chat_large_train.jsonl"
+
+TRAIN_FILE = "/workspace/llm/chat_large_curated.jsonl"
 VAL_FILE = "/workspace/llm/chat_large_val.jsonl"
 
-## GPU ##
+TOKENIZER_FILE = "/workspace/llm/tokenizer_large.json"
+
+LATEST_CHECKPOINT = "/workspace/llm/minigpt_large_sft_latest.pt"
+BEST_CHECKPOINT = "/workspace/llm/minigpt_large_sft_best.pt"
+
+
+# ============================================================
+# SEED / DEVICE
+# ============================================================
+
+random.seed(SEED)
+torch.manual_seed(SEED)
+
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
 
 device = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
@@ -22,20 +51,47 @@ device = torch.device(
 print(f"Device: {device}")
 
 
-## CARREGAR MODELO ##
+# ============================================================
+# TOKENIZER
+# ============================================================
 
-checkpoint = torch.load(
+tokenizer = Tokenizer.from_file(TOKENIZER_FILE)
+
+vocab_size = tokenizer.get_vocab_size()
+
+pad_id = tokenizer.token_to_id("[PAD]")
+eos_id = tokenizer.token_to_id("[EOS]")
+
+print(
+    f"Tokenizer carregado | "
+    f"vocab = {vocab_size:,} | "
+    f"PAD = {pad_id} | EOS = {eos_id}"
+)
+
+
+def encode(text):
+    return tokenizer.encode(text).ids
+
+
+def decode(ids):
+    return tokenizer.decode(ids)
+
+
+# ============================================================
+# CARREGAR BASE MODEL
+# ============================================================
+
+base_checkpoint = torch.load(
     BASE_CHECKPOINT,
     map_location=device,
     weights_only=False
 )
 
-vocab_size = checkpoint["vocab_size"]
-n_embd = checkpoint["n_embd"]
-num_heads = checkpoint["num_heads"]
-num_layers = checkpoint["num_layers"]
-block_size = checkpoint["block_size"]
-dropout = checkpoint["dropout"]
+n_embd = base_checkpoint["n_embd"]
+num_heads = base_checkpoint["num_heads"]
+num_layers = base_checkpoint["num_layers"]
+block_size = base_checkpoint["block_size"]
+dropout = base_checkpoint["dropout"]
 
 model = MiniGPT(
     vocab_size=vocab_size,
@@ -47,45 +103,24 @@ model = MiniGPT(
 ).to(device)
 
 model.load_state_dict(
-    checkpoint["model_state_dict"]
+    base_checkpoint["model_state_dict"]
 )
 
 print(
     f"Large Base carregado | "
-    f"step = {checkpoint['step']:,} | "
-    f"val_loss = {checkpoint['val_loss']:.4f}"
+    f"step = {base_checkpoint['step']:,} | "
+    f"val_loss = {base_checkpoint['val_loss']:.4f}"
 )
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
-    lr=1e-4
+    lr=LEARNING_RATE
 )
 
-best_val_loss = float("inf")
 
-## TOKENIZER ##
-
-tokenizer = Tokenizer.from_file(
-    "/workspace/llm/tokenizer_large.json"
-)
-
-vocab_size = tokenizer.get_vocab_size()
-
-pad_id = tokenizer.token_to_id("[PAD]")
-eos_id = tokenizer.token_to_id("[EOS]")
-
-print(f"PAD = {pad_id} | EOS = {eos_id}")
-
-
-def encode(text):
-    return tokenizer.encode(text).ids
-
-
-def decode(ids):
-    return tokenizer.decode(ids)
-
-
-## DATASET CONVERSACIONAL ##
+# ============================================================
+# DATASET
+# ============================================================
 
 def load_conversations(path):
     conversations = []
@@ -97,12 +132,17 @@ def load_conversations(path):
 
             record = json.loads(line)
 
-            conversations.append(
-                record["messages"]
-            )
+            messages = record.get("messages")
+
+            if not messages:
+                continue
+
+            conversations.append(messages)
 
     return conversations
 
+
+print("\nA carregar datasets...")
 
 train_conversations = load_conversations(TRAIN_FILE)
 val_conversations = load_conversations(VAL_FILE)
@@ -114,140 +154,226 @@ print(
 )
 
 
-## CRIAR AS CONVERSAS ##
+# ============================================================
+# TOKENIZAR UMA MENSAGEM
+# ============================================================
 
+def encode_message(message):
+    role = message["role"]
+    content = message["content"]
+
+    if role == "system":
+        ids = encode(
+            f"Sistema: {content}\n"
+        )
+
+        mask = [0] * len(ids)
+
+        return ids, mask
+
+    if role == "user":
+        ids = encode(
+            f"Utilizador: {content}\n"
+        )
+
+        mask = [0] * len(ids)
+
+        return ids, mask
+
+    if role == "assistant":
+        prefix_ids = encode(
+            "Assistente: "
+        )
+
+        content_ids = encode(content)
+
+        newline_ids = encode("\n")
+
+        ids = (
+            prefix_ids
+            + content_ids
+            + [eos_id]
+            + newline_ids
+        )
+
+        # Não treinamos no prefixo.
+        # Treinamos conteúdo + EOS.
+        # Newline é apenas separador/contexto.
+        mask = (
+            [0] * len(prefix_ids)
+            + [1] * len(content_ids)
+            + [1]
+            + [0] * len(newline_ids)
+        )
+
+        return ids, mask
+
+    return [], []
+
+
+# ============================================================
+# PREPARAR CONVERSA
+#
+# Regra:
+# - nunca começamos um sample a meio de uma mensagem;
+# - nunca cortamos uma mensagem normal ao meio;
+# - mantemos contexto anterior enquanto couber;
+# - só supervisionamos respostas do Assistant;
+# - mensagens individuais > block_size são ignoradas.
+# ============================================================
 
 def prepare_conversation(conversation):
-    all_ids = []
-    loss_mask = []
+
+    encoded_messages = []
 
     for message in conversation:
-        role = message["role"]
-        content = message["content"]
 
-        if role == "system":
-            ids = encode(f"Sistema: {content}\n")
+        ids, mask = encode_message(message)
 
-            all_ids.extend(ids)
-            loss_mask.extend([0] * len(ids))
+        if not ids:
+            continue
 
-        elif role == "user":
-            ids = encode(f"Utilizador: {content}\n")
+        # Uma única mensagem maior do que a janela
+        # não pode ser representada sem a cortar.
+        if len(ids) > block_size:
+            continue
 
-            all_ids.extend(ids)
-            loss_mask.extend([0] * len(ids))
-
-        elif role == "assistant":
-            prefix_ids = encode("Assistente: ")
-            content_ids = encode(content)
-
-            all_ids.extend(prefix_ids)
-            loss_mask.extend([0] * len(prefix_ids))
-
-            all_ids.extend(content_ids)
-            loss_mask.extend([1] * len(content_ids))
-
-            all_ids.append(eos_id)
-            loss_mask.append(1)
-
-            newline_ids = encode("\n")
-            all_ids.extend(newline_ids)
-            loss_mask.extend([0] * len(newline_ids))
+        encoded_messages.append(
+            (ids, mask)
+        )
 
     samples = []
 
-    # Precisamos de block_size + 1 tokens,
-    # porque um token é usado como target seguinte.
-    chunk_size = block_size + 1
+    # Cada resposta do assistant cria uma oportunidade
+    # de treino.
+    for assistant_index, (assistant_ids, assistant_mask) \
+            in enumerate(encoded_messages):
 
-    for start in range(0, len(all_ids) - 1, block_size):
-        ids_chunk = all_ids[start:start + chunk_size]
-        mask_chunk = loss_mask[start:start + chunk_size]
-
-        if len(ids_chunk) < 2:
+        if sum(assistant_mask) == 0:
             continue
 
-        x = torch.tensor(ids_chunk[:-1], dtype=torch.long)
-        y = torch.tensor(ids_chunk[1:], dtype=torch.long)
-        mask = torch.tensor(mask_chunk[1:], dtype=torch.float32)
+        selected = []
+        total_length = 0
 
-        # Ignorar chunks onde não existe nada
-        # do Assistant para aprender.
+        # Construímos contexto de trás para a frente,
+        # começando pela resposta atual.
+        for index in range(
+            assistant_index,
+            -1,
+            -1
+        ):
+
+            ids, mask = encoded_messages[index]
+
+            if total_length + len(ids) > block_size + 1:
+                break
+
+            selected.append(
+                (ids, mask, index)
+            )
+
+            total_length += len(ids)
+
+        selected.reverse()
+
+        all_ids = []
+        loss_mask = []
+
+        for ids, mask, index in selected:
+
+            all_ids.extend(ids)
+
+            # Só queremos calcular loss na resposta
+            # do assistant que originou ESTE sample.
+            #
+            # Assistant anteriores servem apenas
+            # como contexto.
+            if index == assistant_index:
+                loss_mask.extend(mask)
+            else:
+                loss_mask.extend(
+                    [0] * len(mask)
+                )
+
+        if len(all_ids) < 2:
+            continue
+
+        x = torch.tensor(
+            all_ids[:-1],
+            dtype=torch.long
+        )
+
+        y = torch.tensor(
+            all_ids[1:],
+            dtype=torch.long
+        )
+
+        mask = torch.tensor(
+            loss_mask[1:],
+            dtype=torch.float32
+        )
+
         if mask.sum().item() == 0:
             continue
 
-        samples.append((x, y, mask))
+        samples.append(
+            (x, y, mask)
+        )
 
     return samples
 
-samples = prepare_conversation(
-    train_conversations[0]
-)
 
-print(f"Número de chunks: {len(samples)}")
-
-for i, (x, y, mask) in enumerate(samples):
-    print(f"\n--- CHUNK {i + 1} ---")
-    print("Shape:", x.shape)
-    print("Tokens supervisionados:", int(mask.sum().item()))
-    print("Tokens totais:", len(mask))
-    print("Texto:")
-    print(decode(x.tolist()))
-
-raise SystemExit
-
-## DEFINIR BATCHES, AQUI ESTAMOS A RETIRAR BATCHES AO ACASO PELO INPUT E A ENCHER COM 0 AQUELES QUE TÊM ##
-## MENOS TOKENS, PARA ALÉM DISSO TAMOS TAMBÉM A DIZER QUE ESSES NÃO INTERESSAM PARA A LOSS ##
+# ============================================================
+# BATCH
+# ============================================================
 
 def get_batch(conversations):
+
     samples = []
 
-    while len(samples) < batch_size:
-        index = torch.randint(
-            len(conversations),
-            (1,)
-        ).item()
+    while len(samples) < BATCH_SIZE:
+
+        conversation = random.choice(
+            conversations
+        )
 
         conversation_samples = prepare_conversation(
-            conversations[index]
+            conversation
         )
 
         if not conversation_samples:
             continue
 
-        # Escolhemos aleatoriamente um chunk válido
-        # desta conversa.
-        sample_index = torch.randint(
-            len(conversation_samples),
-            (1,)
-        ).item()
-
-        samples.append(
-            conversation_samples[sample_index]
+        sample = random.choice(
+            conversation_samples
         )
 
+        samples.append(sample)
+
     max_len = max(
-        len(x) for x, _, _ in samples
+        len(x)
+        for x, _, _ in samples
     )
 
     X = torch.full(
-        (batch_size, max_len),
+        (BATCH_SIZE, max_len),
         pad_id,
         dtype=torch.long
     )
 
     Y = torch.full(
-        (batch_size, max_len),
+        (BATCH_SIZE, max_len),
         pad_id,
         dtype=torch.long
     )
 
     masks = torch.zeros(
-        (batch_size, max_len),
+        (BATCH_SIZE, max_len),
         dtype=torch.float32
     )
 
     for i, (x, y, mask) in enumerate(samples):
+
         length = len(x)
 
         X[i, :length] = x
@@ -260,199 +386,426 @@ def get_batch(conversations):
         masks.to(device)
     )
 
-## ESTIMAR A LOSS ## 
 
-@torch.no_grad()
-def estimate_loss(model, eval_iters=50):
-    model.eval()
+# ============================================================
+# LOSS
+# ============================================================
 
-    results = {}
+def calculate_loss(xb, yb, mask):
 
-    for name, dataset in [
-        ("train", train_conversations),
-        ("val", val_conversations)
-    ]:
-        losses = []
-
-        for _ in range(eval_iters):
-            xb, yb, mask = get_batch(dataset)
-
-            logits = model(xb)
-
-            B, T, V = logits.shape
-
-            logits = logits.view(B * T, V)
-            targets = yb.view(B * T)
-            mask = mask.view(B * T)
-
-            token_losses = F.cross_entropy(
-                logits,
-                targets,
-                reduction="none"
-            )
-
-            loss = (
-                (token_losses * mask).sum()
-                / mask.sum()
-            )
-
-            losses.append(loss.item())
-
-        results[name] = sum(losses) / len(losses)
-
-    model.train()
-
-    return results
-
-
-## TREINO + GUARDAR MELHOR CHAT ## 
-
-
-for step in range(1):
-
-    xb, yb, mask = get_batch(train_conversations)
-
-    # Forward
     logits = model(xb)
 
     B, T, V = logits.shape
 
-    logits = logits.view(B * T, V)
-    targets = yb.view(B * T)
-    mask = mask.view(B * T)
+    logits = logits.reshape(
+        B * T,
+        V
+    )
 
-    # Assistant-only loss
+    targets = yb.reshape(
+        B * T
+    )
+
+    mask = mask.reshape(
+        B * T
+    )
+
     token_losses = F.cross_entropy(
         logits,
         targets,
         reduction="none"
     )
 
+    supervised_tokens = mask.sum()
+
     loss = (
         (token_losses * mask).sum()
-        / mask.sum()
+        / supervised_tokens
     )
 
-    # Backprop
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+    return loss
 
-    # Avaliação
-    if step % 50 == 0:
 
-        losses = estimate_loss(model)
+# ============================================================
+# EVALUATION
+# ============================================================
 
-        print(
-            f"Step {step}: "
-            f"train = {losses['train']:.4f} | "
-            f"val = {losses['val']:.4f}"
+@torch.no_grad()
+def estimate_loss():
+
+    model.eval()
+
+    results = {}
+
+    for name, conversations in [
+        ("train", train_conversations),
+        ("val", val_conversations)
+    ]:
+
+        losses = []
+
+        for _ in range(EVAL_ITERS):
+
+            xb, yb, mask = get_batch(
+                conversations
+            )
+
+            loss = calculate_loss(
+                xb,
+                yb,
+                mask
+            )
+
+            losses.append(
+                loss.item()
+            )
+
+        results[name] = (
+            sum(losses)
+            / len(losses)
         )
 
-        if losses["val"] < best_val_loss:
-            best_val_loss = losses["val"]
+    model.train()
 
-            torch.save({
-                "model_state_dict": model.state_dict(),
-                "vocab_size": vocab_size,
-                "n_embd": n_embd,
-                "num_heads": num_heads,
-                "num_layers": num_layers,
-                "block_size": block_size,
-                "dropout": dropout,
-                "val_loss": losses["val"],
-                "train_loss": losses["train"]
-            }, "src/data/llm/minigpt_v3_chat.pt")
+    return results
+
+
+# ============================================================
+# CHECKPOINT
+# ============================================================
+
+def save_checkpoint(
+    path,
+    step,
+    train_loss,
+    val_loss,
+    best_val_loss
+):
+
+    torch.save(
+        {
+            "model_state_dict":
+                model.state_dict(),
+
+            "optimizer_state_dict":
+                optimizer.state_dict(),
+
+            "step":
+                step,
+
+            "vocab_size":
+                vocab_size,
+
+            "n_embd":
+                n_embd,
+
+            "num_heads":
+                num_heads,
+
+            "num_layers":
+                num_layers,
+
+            "block_size":
+                block_size,
+
+            "dropout":
+                dropout,
+
+            "train_loss":
+                train_loss,
+
+            "val_loss":
+                val_loss,
+
+            "best_val_loss":
+                best_val_loss,
+        },
+        path
+    )
+
+
+# ============================================================
+# RESUME SFT
+# ============================================================
+
+start_step = 0
+best_val_loss = float("inf")
+
+if Path(LATEST_CHECKPOINT).exists():
+
+    print(
+        "\nCheckpoint SFT encontrado. "
+        "A retomar treino..."
+    )
+
+    sft_checkpoint = torch.load(
+        LATEST_CHECKPOINT,
+        map_location=device,
+        weights_only=False
+    )
+
+    model.load_state_dict(
+        sft_checkpoint[
+            "model_state_dict"
+        ]
+    )
+
+    optimizer.load_state_dict(
+        sft_checkpoint[
+            "optimizer_state_dict"
+        ]
+    )
+
+    start_step = (
+        sft_checkpoint["step"] + 1
+    )
+
+    best_val_loss = (
+        sft_checkpoint[
+            "best_val_loss"
+        ]
+    )
+
+    print(
+        f"SFT retomado no step "
+        f"{start_step:,}"
+    )
+
+
+# ============================================================
+# SANITY CHECK
+# ============================================================
+
+print("\nSanity check...")
+
+xb, yb, mask = get_batch(
+    train_conversations
+)
+
+print(
+    "Batch:",
+    xb.shape
+)
+
+print(
+    "Tokens supervisionados:",
+    int(mask.sum().item())
+)
+
+print(
+    "Contexto máximo:",
+    xb.shape[1],
+    "/",
+    block_size
+)
+
+
+# ============================================================
+# TRAINING
+# ============================================================
+
+print("\nA iniciar SFT...\n")
+
+model.train()
+
+for step in range(
+    start_step,
+    MAX_STEPS
+):
+
+    xb, yb, mask = get_batch(
+        train_conversations
+    )
+
+    loss = calculate_loss(
+        xb,
+        yb,
+        mask
+    )
+
+    optimizer.zero_grad(
+        set_to_none=True
+    )
+
+    loss.backward()
+
+    torch.nn.utils.clip_grad_norm_(
+        model.parameters(),
+        1.0
+    )
+
+    optimizer.step()
+
+    if step % LOG_INTERVAL == 0:
+
+        print(
+            f"Step {step:,} | "
+            f"batch_loss = "
+            f"{loss.item():.4f}"
+        )
+
+    if step % EVAL_INTERVAL == 0:
+
+        losses = estimate_loss()
+
+        train_loss = losses["train"]
+        val_loss = losses["val"]
+
+        print(
+            "\n"
+            f"Step {step:,} | "
+            f"train = {train_loss:.4f} | "
+            f"val = {val_loss:.4f}"
+        )
+
+        # BEST
+        if val_loss < best_val_loss:
+
+            best_val_loss = val_loss
+
+            save_checkpoint(
+                BEST_CHECKPOINT,
+                step,
+                train_loss,
+                val_loss,
+                best_val_loss
+            )
 
             print(
-                f"Novo melhor CHAT guardado! "
+                f"Novo BEST SFT | "
                 f"val = {best_val_loss:.4f}"
             )
 
-## CARREGAR MELHOR MODELO DEPOIS DO TREINO ##
+        # LATEST
+        save_checkpoint(
+            LATEST_CHECKPOINT,
+            step,
+            train_loss,
+            val_loss,
+            best_val_loss
+        )
+
+        print(
+            "LATEST SFT guardado\n"
+        )
+
+
+# ============================================================
+# LOAD BEST
+# ============================================================
+
+print("\nTreino terminado.")
 
 best_checkpoint = torch.load(
-    "src/data/llm/minigpt_v4_chat.pt",
-    map_location=device
+    BEST_CHECKPOINT,
+    map_location=device,
+    weights_only=False
 )
 
 model.load_state_dict(
-    best_checkpoint["model_state_dict"]
+    best_checkpoint[
+        "model_state_dict"
+    ]
 )
 
 model.eval()
 
 print(
-    f"\nMelhor modelo carregado | "
-    f"val_loss = {best_checkpoint['val_loss']:.4f}"
+    f"BEST carregado | "
+    f"step = {best_checkpoint['step']:,} | "
+    f"val = {best_checkpoint['val_loss']:.4f}"
 )
 
 
-## TESTAR RESPOSTAS ##
+# ============================================================
+# GENERATION
+# ============================================================
 
 questions = [
     "Olá, como estás?",
     "O que é uma rede neuronal?",
     "Quanto é 7 + 5?",
-    "Quanto é 23 + 41?",
-    "Quanto é 8 * 7?",
     "O que é a memória RAM?",
     "Como posso organizar melhor o meu dia?",
-    "Como posso aprender uma coisa nova?",
     "Portugal fica em que continente?"
 ]
 
-with torch.no_grad():
 
-    for question in questions:
+@torch.no_grad()
+def answer(question, max_new_tokens=150):
 
-        prompt = f"Utilizador: {question}\nAssistente:"
+    prompt = (
+        f"Utilizador: {question}\n"
+        f"Assistente: "
+    )
 
-        context = torch.tensor(
-            [encode(prompt)],
-            dtype=torch.long,
-            device=device
+    context = torch.tensor(
+        [encode(prompt)],
+        dtype=torch.long,
+        device=device
+    )
+
+    generated = context.clone()
+
+    for _ in range(max_new_tokens):
+
+        input_tokens = (
+            generated[:, -block_size:]
         )
 
-        generated = context.clone()
+        logits = model(
+            input_tokens
+        )
 
-        # Máximo de 50 tokens por resposta
-        for _ in range(50):
+        next_logits = (
+            logits[:, -1, :]
+        )
 
-            # Só podemos dar ao Transformer até block_size tokens
-            input_tokens = generated[:, -block_size:]
+        # Sampling ligeiramente conservador.
+        temperature = 0.8
 
-            logits = model(input_tokens)
+        next_logits = (
+            next_logits / temperature
+        )
 
-            # Só interessa a previsão do próximo token
-            next_logits = logits[:, -1, :]
+        probs = F.softmax(
+            next_logits,
+            dim=-1
+        )
 
-            probs = F.softmax(
-                next_logits,
-                dim=-1
-            )
+        next_token = torch.multinomial(
+            probs,
+            num_samples=1
+        )
 
-            next_token = torch.multinomial(
-                probs,
-                num_samples=1
-            )
+        if next_token.item() == eos_id:
+            break
 
-            # Se o modelo disser EOS, acabou a resposta
-            if next_token.item() == eos_id:
-                break
+        generated = torch.cat(
+            [generated, next_token],
+            dim=1
+        )
 
-            generated = torch.cat(
-                [generated, next_token],
-                dim=1
-            )
+    response_ids = generated[
+        0,
+        context.shape[1]:
+    ].tolist()
 
-        # Mostrar apenas a resposta,
-        # sem repetir o prompt
-        response_ids = generated[
-            0,
-            context.shape[1]:
-        ].tolist()
+    return decode(response_ids)
 
-        print("\n" + "=" * 60)
-        print(f"PERGUNTA: {question}")
-        print(f"RESPOSTA: {decode(response_ids)}")
+
+print("\n" + "=" * 70)
+print("TESTE DO MINIGPT LARGE SFT")
+print("=" * 70)
+
+for question in questions:
+
+    response = answer(question)
+
+    print(
+        f"\nUtilizador: {question}"
+    )
+
+    print(
+        f"Assistente: {response}"
+    )
