@@ -2,7 +2,7 @@ import time
 import torch
 import torch.nn.functional as F
 
-from model import MiniGPT
+from src.minigpt.model import MiniGPT
 
 
 # ============================================================
@@ -16,9 +16,34 @@ NUM_HEADS = 12
 NUM_LAYERS = 12
 DROPOUT = 0.1
 
-device = "cuda"
+DEVICE = "cuda"
 
-batch_sizes = [1, 2, 4, 8, 16, 32]
+# Vamos até ao limite da GPU.
+BATCH_SIZES = [1, 2, 4, 8, 16, 32, 48, 64]
+
+# Mais do que uma medição para evitar conclusões
+# baseadas num único step ruidoso.
+WARMUP_STEPS = 3
+BENCHMARK_STEPS = 10
+
+
+# ============================================================
+# GPU INFO
+# ============================================================
+
+assert torch.cuda.is_available(), "CUDA não está disponível."
+
+gpu_name = torch.cuda.get_device_name(0)
+gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+
+print("=" * 70)
+print("GPU BENCHMARK")
+print("=" * 70)
+
+print(f"GPU: {gpu_name}")
+print(f"VRAM total: {gpu_memory:.2f} GB")
+print(f"PyTorch: {torch.__version__}")
+print(f"CUDA: {torch.version.cuda}")
 
 
 # ============================================================
@@ -31,93 +56,142 @@ model = MiniGPT(
     num_heads=NUM_HEADS,
     block_size=BLOCK_SIZE,
     num_layers=NUM_LAYERS,
-    dropout=DROPOUT
-).to(device)
+    dropout=DROPOUT,
+).to(DEVICE)
+
+model.train()
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
-    lr=3e-4
+    lr=3e-4,
 )
 
-print(
-    f"Parâmetros: "
-    f"{sum(p.numel() for p in model.parameters()) / 1e6:.2f}M"
-)
+num_params = sum(p.numel() for p in model.parameters())
+
+print(f"Parâmetros: {num_params:,} ({num_params / 1e6:.2f}M)")
+print(f"Context length: {BLOCK_SIZE}")
+print(f"Warmup steps: {WARMUP_STEPS}")
+print(f"Benchmark steps: {BENCHMARK_STEPS}")
 
 
 # ============================================================
 # BENCHMARK
 # ============================================================
 
-for batch_size in batch_sizes:
+results = []
 
-    print(f"\n--- Batch size {batch_size} ---")
+for batch_size in BATCH_SIZES:
+
+    print()
+    print("=" * 70)
+    print(f"BATCH SIZE {batch_size}")
+    print("=" * 70)
 
     try:
-        torch.cuda.empty_cache()
         optimizer.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
 
         x = torch.randint(
             0,
             VOCAB_SIZE,
             (batch_size, BLOCK_SIZE),
-            device=device
+            dtype=torch.long,
+            device=DEVICE,
         )
 
         y = torch.randint(
             0,
             VOCAB_SIZE,
             (batch_size, BLOCK_SIZE),
-            device=device
+            dtype=torch.long,
+            device=DEVICE,
         )
 
-        torch.cuda.reset_peak_memory_stats()
+        # ----------------------------------------------------
+        # WARM-UP
+        # ----------------------------------------------------
 
-        # warm-up
-        logits = model(x)
+        for _ in range(WARMUP_STEPS):
 
-        loss = F.cross_entropy(
-            logits.view(-1, VOCAB_SIZE),
-            y.view(-1)
-        )
+            optimizer.zero_grad(set_to_none=True)
 
-        loss.backward()
-        optimizer.step()
+            logits = model(x)
+
+            loss = F.cross_entropy(
+                logits.reshape(-1, VOCAB_SIZE),
+                y.reshape(-1),
+            )
+
+            loss.backward()
+            optimizer.step()
 
         torch.cuda.synchronize()
 
-        # benchmark
-        optimizer.zero_grad(set_to_none=True)
+        # Não queremos que memória usada durante warm-up
+        # contamine o peak medido.
+        torch.cuda.reset_peak_memory_stats()
+
+        # ----------------------------------------------------
+        # REAL BENCHMARK
+        # ----------------------------------------------------
 
         start = time.perf_counter()
 
-        logits = model(x)
+        for _ in range(BENCHMARK_STEPS):
 
-        loss = F.cross_entropy(
-            logits.view(-1, VOCAB_SIZE),
-            y.view(-1)
-        )
+            optimizer.zero_grad(set_to_none=True)
 
-        loss.backward()
-        optimizer.step()
+            logits = model(x)
+
+            loss = F.cross_entropy(
+                logits.reshape(-1, VOCAB_SIZE),
+                y.reshape(-1),
+            )
+
+            loss.backward()
+            optimizer.step()
 
         torch.cuda.synchronize()
 
         elapsed = time.perf_counter() - start
 
-        tokens = batch_size * BLOCK_SIZE
-        tokens_per_second = tokens / elapsed
+        # ----------------------------------------------------
+        # METRICS
+        # ----------------------------------------------------
+
+        total_tokens = (
+            batch_size
+            * BLOCK_SIZE
+            * BENCHMARK_STEPS
+        )
+
+        tokens_per_second = total_tokens / elapsed
+
+        seconds_per_step = elapsed / BENCHMARK_STEPS
 
         peak_memory = (
             torch.cuda.max_memory_allocated()
             / 1024**3
         )
 
-        print(f"Tempo: {elapsed:.3f}s")
-        print(f"Tokens/s: {tokens_per_second:,.0f}")
-        print(f"Peak VRAM: {peak_memory:.2f} GB")
+        print(f"Tempo total:       {elapsed:.3f} s")
+        print(f"Tempo / step:      {seconds_per_step:.4f} s")
+        print(f"Tokens / segundo:  {tokens_per_second:,.0f}")
+        print(f"Peak VRAM:         {peak_memory:.2f} GB")
+
+        results.append(
+            {
+                "batch": batch_size,
+                "tokens_per_second": tokens_per_second,
+                "seconds_per_step": seconds_per_step,
+                "peak_vram": peak_memory,
+            }
+        )
 
         del x, y, logits, loss
+
+        optimizer.zero_grad(set_to_none=True)
+        torch.cuda.empty_cache()
 
     except torch.OutOfMemoryError:
 
@@ -127,3 +201,43 @@ for batch_size in batch_sizes:
         torch.cuda.empty_cache()
 
         break
+
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+print()
+print("=" * 70)
+print("RESUMO")
+print("=" * 70)
+
+print(
+    f"{'Batch':>8} "
+    f"{'Tokens/s':>15} "
+    f"{'s/step':>12} "
+    f"{'VRAM GB':>12}"
+)
+
+for result in results:
+
+    print(
+        f"{result['batch']:>8} "
+        f"{result['tokens_per_second']:>15,.0f} "
+        f"{result['seconds_per_step']:>12.4f} "
+        f"{result['peak_vram']:>12.2f}"
+    )
+
+
+if results:
+
+    best = max(
+        results,
+        key=lambda x: x["tokens_per_second"],
+    )
+
+    print()
+    print(
+        f"Melhor throughput: batch {best['batch']} "
+        f"→ {best['tokens_per_second']:,.0f} tokens/s"
+    )
