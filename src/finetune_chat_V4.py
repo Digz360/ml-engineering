@@ -127,32 +127,34 @@ def prepare_conversation(conversation):
 
         if role == "system":
             text = f"Sistema: {content}\n"
-            supervise = False
+            ids = encode(text)
+
+            all_ids.extend(ids)
+            loss_mask.extend([0] * len(ids))
 
         elif role == "user":
             text = f"Utilizador: {content}\n"
-            supervise = False
+            ids = encode(text)
+
+            all_ids.extend(ids)
+            loss_mask.extend([0] * len(ids))
 
         elif role == "assistant":
-            text = f"Assistente: {content}\n"
-            supervise = True
+            # O prefixo faz parte do contexto,
+            # mas não entra na loss.
+            prefix_ids = encode("Assistente: ")
+            content_ids = encode(content + "\n")
 
-        else:
-            continue
+            all_ids.extend(prefix_ids)
+            loss_mask.extend([0] * len(prefix_ids))
 
-        ids = encode(text)
+            all_ids.extend(content_ids)
+            loss_mask.extend([1] * len(content_ids))
 
-        all_ids.extend(ids)
-
-        loss_mask.extend(
-            [1 if supervise else 0] * len(ids)
-        )
-
-    # EOS termina a conversa
+    # Fim da conversa.
     all_ids.append(eos_id)
 
-    # Queremos que o modelo aprenda a terminar
-    # depois da última resposta.
+    # Queremos ensinar o modelo a terminar a resposta/conversa.
     loss_mask.append(1)
 
     x = torch.tensor(
@@ -165,8 +167,6 @@ def prepare_conversation(conversation):
         dtype=torch.long
     )
 
-    # A máscara corresponde ao token que estamos
-    # a tentar prever (y), daí o [1:].
     mask = torch.tensor(
         loss_mask[1:],
         dtype=torch.float32
