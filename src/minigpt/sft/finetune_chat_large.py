@@ -126,24 +126,20 @@ def prepare_conversation(conversation):
         content = message["content"]
 
         if role == "system":
-            text = f"Sistema: {content}\n"
-            ids = encode(text)
+            ids = encode(f"Sistema: {content}\n")
 
             all_ids.extend(ids)
             loss_mask.extend([0] * len(ids))
 
         elif role == "user":
-            text = f"Utilizador: {content}\n"
-            ids = encode(text)
+            ids = encode(f"Utilizador: {content}\n")
 
             all_ids.extend(ids)
             loss_mask.extend([0] * len(ids))
 
         elif role == "assistant":
-            # O prefixo faz parte do contexto,
-            # mas não entra na loss.
             prefix_ids = encode("Assistente: ")
-            content_ids = encode(content + "\n")
+            content_ids = encode(content)
 
             all_ids.extend(prefix_ids)
             loss_mask.extend([0] * len(prefix_ids))
@@ -151,38 +147,52 @@ def prepare_conversation(conversation):
             all_ids.extend(content_ids)
             loss_mask.extend([1] * len(content_ids))
 
-    # Fim da conversa.
-    all_ids.append(eos_id)
+            all_ids.append(eos_id)
+            loss_mask.append(1)
 
-    # Queremos ensinar o modelo a terminar a resposta/conversa.
-    loss_mask.append(1)
+            newline_ids = encode("\n")
+            all_ids.extend(newline_ids)
+            loss_mask.extend([0] * len(newline_ids))
 
-    x = torch.tensor(
-        all_ids[:-1],
-        dtype=torch.long
-    )
+    samples = []
 
-    y = torch.tensor(
-        all_ids[1:],
-        dtype=torch.long
-    )
+    # Precisamos de block_size + 1 tokens,
+    # porque um token é usado como target seguinte.
+    chunk_size = block_size + 1
 
-    mask = torch.tensor(
-        loss_mask[1:],
-        dtype=torch.float32
-    )
+    for start in range(0, len(all_ids) - 1, block_size):
+        ids_chunk = all_ids[start:start + chunk_size]
+        mask_chunk = loss_mask[start:start + chunk_size]
 
-    return x, y, mask
+        if len(ids_chunk) < 2:
+            continue
 
-x, y, mask = prepare_conversation(
+        x = torch.tensor(ids_chunk[:-1], dtype=torch.long)
+        y = torch.tensor(ids_chunk[1:], dtype=torch.long)
+        mask = torch.tensor(mask_chunk[1:], dtype=torch.float32)
+
+        # Ignorar chunks onde não existe nada
+        # do Assistant para aprender.
+        if mask.sum().item() == 0:
+            continue
+
+        samples.append((x, y, mask))
+
+    return samples
+
+samples = prepare_conversation(
     train_conversations[0]
 )
 
-print("Shape:", x.shape)
-print("Tokens supervisionados:", int(mask.sum().item()))
-print("Tokens totais:", len(mask))
-print("Texto:")
-print(decode(x.tolist()))
+print(f"Número de chunks: {len(samples)}")
+
+for i, (x, y, mask) in enumerate(samples):
+    print(f"\n--- CHUNK {i + 1} ---")
+    print("Shape:", x.shape)
+    print("Tokens supervisionados:", int(mask.sum().item()))
+    print("Tokens totais:", len(mask))
+    print("Texto:")
+    print(decode(x.tolist()))
 
 raise SystemExit
 
@@ -190,18 +200,35 @@ raise SystemExit
 ## MENOS TOKENS, PARA ALÉM DISSO TAMOS TAMBÉM A DIZER QUE ESSES NÃO INTERESSAM PARA A LOSS ##
 
 def get_batch(conversations):
-    indices = torch.randint(
-        len(conversations),
-        (batch_size,)
+    samples = []
+
+    while len(samples) < batch_size:
+        index = torch.randint(
+            len(conversations),
+            (1,)
+        ).item()
+
+        conversation_samples = prepare_conversation(
+            conversations[index]
+        )
+
+        if not conversation_samples:
+            continue
+
+        # Escolhemos aleatoriamente um chunk válido
+        # desta conversa.
+        sample_index = torch.randint(
+            len(conversation_samples),
+            (1,)
+        ).item()
+
+        samples.append(
+            conversation_samples[sample_index]
+        )
+
+    max_len = max(
+        len(x) for x, _, _ in samples
     )
-
-    samples = [
-        prepare_conversation(conversations[i])
-        for i in indices
-    ]
-
-    max_len = max(len(x) for x, _, _ in samples)
-    max_len = min(max_len, block_size)
 
     X = torch.full(
         (batch_size, max_len),
@@ -221,11 +248,11 @@ def get_batch(conversations):
     )
 
     for i, (x, y, mask) in enumerate(samples):
-        length = min(len(x), max_len)
+        length = len(x)
 
-        X[i, :length] = x[:length]
-        Y[i, :length] = y[:length]
-        masks[i, :length] = mask[:length]
+        X[i, :length] = x
+        Y[i, :length] = y
+        masks[i, :length] = mask
 
     return (
         X.to(device),
