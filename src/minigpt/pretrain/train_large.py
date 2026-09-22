@@ -32,8 +32,8 @@ additional_steps = 110_322
 
 TOKENIZER_FILE = "/workspace/llm/tokenizer_large.json"
 
-TRAIN_BIN = "/workspace/llm/pretrain_large_train.bin"
-VAL_BIN = "/workspace/llm/pretrain_large_val.bin"
+TRAIN_BIN = "/root/llm-data/pretrain_large_train.bin"
+VAL_BIN = "/root/llm-data/pretrain_large_val.bin"
 
 BASE_CHECKPOINT = "/workspace/llm/minigpt_large_best.pt"
 
