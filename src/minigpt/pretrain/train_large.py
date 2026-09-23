@@ -26,21 +26,21 @@ learning_rate = 3e-4
 eval_interval = 500
 eval_iters = 20
 
-# ~1 corpus-equivalente adicional:
-# 1,807,519,192 / (16 * 1024) ~= 110,322
-additional_steps = 110_322
+
+# 483,852,890 / (16 * 1024) ~= 29,532
+additional_steps = 60_532
 
 TOKENIZER_FILE = "/workspace/llm/tokenizer_large.json"
 
-TRAIN_BIN = "/root/llm-data/pretrain_large_train.bin"
-VAL_BIN = "/root/llm-data/pretrain_large_val.bin"
+TRAIN_BIN = "/root/llm-data/pretrain_v2_train.bin"
+VAL_BIN = "/root/llm-data/pretrain_v2_val.bin"
 
-BASE_CHECKPOINT = "/workspace/llm/minigpt_large_best.pt"
+# Começamos com os pesos já treinados nos 2 ciclos de CulturaX
+BASE_CHECKPOINT = "/root/llm-data/minigpt_large_cycle2_best.pt"
 
-# Novos ficheiros para não destruir os checkpoints do primeiro ciclo.
-LATEST_CHECKPOINT = "/workspace/llm/minigpt_large_cycle2_latest.pt"
-BEST_CHECKPOINT = "/workspace/llm/minigpt_large_cycle2_best.pt"
-
+# Checkpoints próprios do V2
+LATEST_CHECKPOINT = "/workspace/llm/minigpt_large_v2_latest.pt"
+BEST_CHECKPOINT = "/workspace/llm/minigpt_large_v2_best.pt"
 
 # ============================================================
 # DEVICE
@@ -168,8 +168,8 @@ original_step = None
 if os.path.exists(LATEST_CHECKPOINT):
 
     print()
-    print("Checkpoint do CICLO 2 encontrado.")
-    print("A retomar ciclo 2...")
+    print("Checkpoint do CICLO 1.2 encontrado.")
+    print("A retomar ciclo 1.2...")
 
     checkpoint = torch.load(
         LATEST_CHECKPOINT,
@@ -216,8 +216,11 @@ else:
         checkpoint["optimizer_state_dict"]
     )
 
-    original_step = checkpoint["step"]
-    best_val_loss = checkpoint["best_val_loss"]
+    original_step = checkpoint["cycle_step"]
+
+    # A validation agora é Wikipedia, portanto começamos
+    # uma nova referência de BEST.
+    best_val_loss = float("inf")
 
     print(
         f"Base carregada do step {original_step:,} | "
@@ -282,7 +285,7 @@ training_start = time.perf_counter()
 
 print()
 print("=" * 70)
-print("A INICIAR PRETRAINING — CICLO 2")
+print("A INICIAR PRETRAINING — CICLO 1.2")
 print("=" * 70)
 
 
@@ -383,7 +386,7 @@ for step in range(cycle_step, additional_steps):
             )
 
             print(
-                f"Novo BEST do ciclo 2! "
+                f"Novo BEST do ciclo 1.2! "
                 f"val = {best_val_loss:.4f}"
             )
 
@@ -398,7 +401,7 @@ elapsed = time.perf_counter() - training_start
 
 print()
 print("=" * 70)
-print("CICLO 2 TERMINADO")
+print("CICLO 1.2 TERMINADO")
 print("=" * 70)
 
 print(f"Tempo total: {elapsed / 3600:.2f} h")
