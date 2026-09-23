@@ -14,7 +14,7 @@ from src.minigpt.model import MiniGPT
 # ============================================================
 
 BATCH_SIZE = 4
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 3e-5
 
 MAX_STEPS = 60_000
 EVAL_INTERVAL = 250
@@ -555,6 +555,11 @@ if Path(LATEST_CHECKPOINT).exists():
             "optimizer_state_dict"
         ]
     )
+    
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = LEARNING_RATE
+
+    print(f"Learning rate atual: {optimizer.param_groups[0]['lr']}")
 
     start_step = (
         sft_checkpoint["step"] + 1
