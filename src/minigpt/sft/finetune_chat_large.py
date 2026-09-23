@@ -25,8 +25,8 @@ SEED = 42
 
 BASE_CHECKPOINT = "/workspace/llm/minigpt_large_best.pt"
 
-TRAIN_FILE = "/workspace/llm/chat_large_curated.jsonl"
-VAL_FILE = "/workspace/llm/chat_large_val.jsonl"
+TRAIN_FILE = "/root/llm-data/chat_large_curated.jsonl"
+VAL_FILE = "/root/llm-data/chat_large_val.jsonl"
 
 TOKENIZER_FILE = "/workspace/llm/tokenizer_large.json"
 
