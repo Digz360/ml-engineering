@@ -9,7 +9,7 @@ from src.minigpt.model import MiniGPT
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-CHECKPOINT_PATH = "/workspace/llm/minigpt_large_best.pt"
+CHECKPOINT_PATH = "/workspace/llm/minigpt_large_cycle2_best.pt"
 TOKENIZER_PATH = "/workspace/llm/tokenizer_large.json"
 
 MAX_NEW_TOKENS = 200
@@ -39,7 +39,12 @@ checkpoint = torch.load(
     map_location=DEVICE,
 )
 
-print(f"Checkpoint step: {checkpoint.get('step', 'N/A')}")
+step = checkpoint.get(
+    "cycle_step",
+    checkpoint.get("step", "N/A")
+)
+
+print(f"Checkpoint step: {step}")
 print(f"Best val loss: {checkpoint.get('best_val_loss', 'N/A')}")
 
 
@@ -76,6 +81,11 @@ print(f"Parâmetros: {num_params:,} ({num_params / 1e6:.2f}M)")
 # ============================================================
 # GENERATION
 # ============================================================
+
+torch.manual_seed(42)
+
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
 
 @torch.no_grad()
 def generate(

@@ -23,15 +23,16 @@ LOG_INTERVAL = 25
 
 SEED = 42
 
-BASE_CHECKPOINT = "/workspace/llm/minigpt_large_best.pt"
+BASE_CHECKPOINT = "/workspace/llm/minigpt_large_v2_best.pt"
+
+LATEST_CHECKPOINT = "/workspace/llm/minigpt_large_v2_sft_latest.pt"
+BEST_CHECKPOINT = "/workspace/llm/minigpt_large_v2_sft_best.pt"
 
 TRAIN_FILE = "/root/llm-data/chat_large_curated.jsonl"
 VAL_FILE = "/root/llm-data/chat_large_val.jsonl"
 
 TOKENIZER_FILE = "/workspace/llm/tokenizer_large.json"
 
-LATEST_CHECKPOINT = "/workspace/llm/minigpt_large_sft_latest.pt"
-BEST_CHECKPOINT = "/workspace/llm/minigpt_large_sft_best.pt"
 
 
 # ============================================================
@@ -108,7 +109,7 @@ model.load_state_dict(
 
 print(
     f"Large Base carregado | "
-    f"step = {base_checkpoint['step']:,} | "
+    f"step = {base_checkpoint['cycle_step']:,} | "
     f"val_loss = {base_checkpoint['val_loss']:.4f}"
 )
 
@@ -717,7 +718,7 @@ model.eval()
 
 print(
     f"BEST carregado | "
-    f"step = {best_checkpoint['step']:,} | "
+    f"step = {best_checkpoint['cycle_step']:,} | "
     f"val = {best_checkpoint['val_loss']:.4f}"
 )
 
