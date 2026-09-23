@@ -21,7 +21,7 @@ num_heads = 12
 num_layers = 12
 
 dropout = 0.1
-learning_rate = 3e-4
+learning_rate = 1e-4
 
 eval_interval = 500
 eval_iters = 20
