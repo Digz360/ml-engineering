@@ -9,7 +9,7 @@ from src.minigpt.model import MiniGPT
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-CHECKPOINT_PATH = "/workspace/llm/minigpt_large_cycle2_best.pt"
+CHECKPOINT_PATH = "/workspace/llm/minigpt_large_v2_best.pt"
 TOKENIZER_PATH = "/workspace/llm/tokenizer_large.json"
 
 MAX_NEW_TOKENS = 200
