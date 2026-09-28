@@ -9,8 +9,8 @@ from src.minigpt.model import MiniGPT
 # CONFIG
 # ============================================================
 
-CHECKPOINT_FILE = "src/minigpt/checkpoints/minigpt_large_sft_best.pt"
-TOKENIZER_FILE = "src/minigpt/tokenization/tokenizer_large.json"
+CHECKPOINT_FILE = "/workspace/llm/minigpt_large_v2_sft_best.pt"
+TOKENIZER_FILE = "/workspace/llm/tokenizer_large.json"
 
 MAX_NEW_TOKENS = 150
 TEMPERATURE = 0.8
