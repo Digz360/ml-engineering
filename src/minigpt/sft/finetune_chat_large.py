@@ -718,7 +718,7 @@ model.eval()
 
 print(
     f"BEST carregado | "
-    f"step = {best_checkpoint['cycle_step']:,} | "
+    f"step = {best_checkpoint['step']:,} | "
     f"val = {best_checkpoint['val_loss']:.4f}"
 )
 
