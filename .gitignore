@@ -22,3 +22,11 @@ src/data/llm/*.pt
 *.pth
 
 *.jpg
+
+# Model artifacts
+models/*.pt
+
+# MLflow local state
+mlflow.db
+mlruns/
+mlartifacts/

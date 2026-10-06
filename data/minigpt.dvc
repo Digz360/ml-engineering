@@ -1,0 +1,6 @@
+outs:
+- md5: eb5b6fa5a53416bba2ca86990a051316.dir
+  size: 5599494723
+  nfiles: 6
+  hash: md5
+  path: minigpt
