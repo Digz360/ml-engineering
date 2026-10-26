@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: whines-ai
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: whines-ai
+
+  template:
+    metadata:
+      labels:
+        app: whines-ai
+
+    spec:
+      containers:
+        - name: whines-ai
+          image: europe-west1-docker.pkg.dev/whines-ai-platform/whines-ai/whines-ai-platform:latest
+
+          ports:
+            - containerPort: 8000

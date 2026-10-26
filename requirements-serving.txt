@@ -1,0 +1,8 @@
+torch
+tokenizers
+fastapi
+uvicorn[standard]
+sentence-transformers
+rank-bm25
+numpy
+python-multipart

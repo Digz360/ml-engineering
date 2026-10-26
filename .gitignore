@@ -30,3 +30,25 @@ models/*.pt
 mlflow.db
 mlruns/
 mlartifacts/
+
+secrets/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Datasets
+src/data/PetImages/
+data/rag/
+
+# Logs / temporary files
+*.log
+*.tmp
+
+# Separate reinforcement learning work
+reinforcement-learning/

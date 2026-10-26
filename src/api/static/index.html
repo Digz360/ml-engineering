@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Whines Cloud AI</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="app">
+
+    <header>
+        <img src="whines_logo.png" class="logo" alt="Whines Cloud">
+        <div>
+            <h1>Whines Cloud</h1>
+            <span>MiniGPT AI Platform</span>
+        </div>
+    </header>
+
+    <main id="chat">
+        <div class="welcome">
+            <h2>Como posso ajudar?</h2>
+            <p>Powered by MiniGPT</p>
+        </div>
+    </main>
+
+    <div id="rag-panel" class="rag-panel hidden">
+        <div class="rag-header">
+            <small>Adiciona contexto para o modelo</small>
+        </div>
+
+        <input
+            type="file"
+            id="rag-file"
+            accept=".md,.txt"
+        >
+    </div>
+
+    <div class="bottom">
+
+        <div class="toolbar">
+            <label class="rag-toggle">
+                <input type="checkbox" id="rag">
+                <span>📎📁</span>
+            </label>
+        </div>
+
+        <div class="composer">
+            <textarea
+                id="prompt"
+                placeholder="Mensagem para Whines Cloud..."
+                rows="1"
+            ></textarea>
+
+            <button id="send-button" onclick="sendMessage()">↑</button>
+        </div>
+
+    </div>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+schema: '2.0'
+stages:
+  validate_data:
+    cmd: python scripts/validate_minigpt_data.py
+    deps:
+    - path: data/minigpt
+      hash: md5
+      md5: eb5b6fa5a53416bba2ca86990a051316.dir
+      size: 5599494723
+      nfiles: 6
+    - path: scripts/validate_minigpt_data.py
+      hash: md5
+      md5: d2ccb68dcce5141d53f3136598800e2f
+      size: 916
+    outs:
+    - path: reports/data_validation.json
+      hash: md5
+      md5: 59d400e830e63174be5a4801fdbc9295
+      size: 660
+  model_info:
+    cmd: python scripts/model_info.py
+    deps:
+    - path: models/minigpt_large_v2_sft_best.pt
+      hash: md5
+      md5: 041359fb0c2dbb5acd568c26c31a76ff
+      size: 1324863723
+    - path: reports/data_validation.json
+      hash: md5
+      md5: 59d400e830e63174be5a4801fdbc9295
+      size: 660
+    - path: scripts/model_info.py
+      hash: md5
+      md5: b7c817b90b2b4b58783ab81a320f106c
+      size: 828
+    outs:
+    - path: reports/model_info.json
+      hash: md5
+      md5: 7ee98ee6cf3c92b85ab414afe52554d5
+      size: 198

@@ -1,0 +1,17 @@
+stages:
+  validate_data:
+    cmd: python scripts/validate_minigpt_data.py
+    deps:
+      - data/minigpt
+      - scripts/validate_minigpt_data.py
+    outs:
+      - reports/data_validation.json
+
+  model_info:
+    cmd: python scripts/model_info.py
+    deps:
+      - reports/data_validation.json
+      - scripts/model_info.py
+      - models/minigpt_large_v2_sft_best.pt
+    outs:
+      - reports/model_info.json

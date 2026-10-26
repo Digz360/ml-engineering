@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: minigpt
+
+spec:
+  replicas: 3
+
+  selector:
+    matchLabels:
+      app: minigpt
+
+  template:
+    metadata:
+      labels:
+        app: minigpt
+
+    spec:
+      containers:
+        - name: minigpt-api
+          image: minigpt-api-cpu:latest
+          imagePullPolicy: Never
+
+          ports:
+            - containerPort: 8000
